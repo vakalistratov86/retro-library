@@ -2,6 +2,7 @@
 !requirements.txt
 !service.py
 !metadata.py
+!metadata_corrections.json
 !restore_backup.py
 !app.js
 !library.js

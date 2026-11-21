@@ -305,16 +305,53 @@ class ServiceTest(unittest.TestCase):
         manager = metadata.MetadataManager(s)
         path = s.catalog()[0]['path']
         index = {'records': [{'title': 'Game (USA)', 'crcs': [], 'genre': 'Action'}], 'sources': [], 'warnings': []}
-        with patch.object(manager.provider, 'index', return_value=index), patch.object(manager.provider, 'artwork', return_value=(None, None)), patch.object(manager.provider, 'description', return_value={'wikidata_id': 'Q1'}), patch.object(manager.provider, 'facts', return_value=({'year': '2000', 'genre': 'Racing', 'developer': 'Studio'}, 'https://www.wikidata.org/wiki/Q1')):
+        with patch.object(manager.provider, 'index', return_value=index), patch.object(manager.provider, 'artwork', return_value=(None, None)), patch.object(manager.provider, 'description', return_value={'wikidata_id': 'Q1'}), patch.object(manager.provider, 'identify', return_value='Q1'), patch.object(manager.provider, 'facts', return_value=({'year': '2000', 'genre': 'Racing', 'developer': 'Studio'}, 'https://www.wikidata.org/wiki/Q1')):
             manager.process(path)
         record = s.catalog()[0]['metadata']
         self.assertEqual((record['year'], record['genre'], record['developer']), ('2000', 'Action', 'Studio'))
         self.assertEqual(record['metadata_version'], metadata.METADATA_VERSION)
-        with patch.object(manager.provider, 'index', return_value=index), patch.object(manager.provider, 'artwork', return_value=(None, None)), patch.object(manager.provider, 'description', side_effect=OSError('offline')), patch.object(manager.provider, 'facts', side_effect=OSError('offline')):
+        with patch.object(manager.provider, 'index', return_value=index), patch.object(manager.provider, 'artwork', return_value=(None, None)), patch.object(manager.provider, 'description', side_effect=OSError('offline')), patch.object(manager.provider, 'identify', side_effect=OSError('offline')), patch.object(manager.provider, 'facts', side_effect=OSError('offline')):
             manager.process(path)
         record = s.catalog()[0]['metadata']
         self.assertEqual((record['year'], record['developer']), ('2000', 'Studio'))
         self.assertIn('https://www.wikidata.org/wiki/Q1', record['sources'])
+
+    def test_metadata_without_article_and_due_retry_are_automatic(self):
+        import metadata
+        self.file('downloads/Library/NES/game.nes')
+        s.add_playlist_entry('NES', 'game.nes')
+        manager = metadata.MetadataManager(s)
+        path = s.catalog()[0]['path']
+        index = {'records': [{'title': 'Game (USA)', 'crcs': []}], 'sources': [], 'warnings': []}
+        facts = dict(year='1990', genre='Platform', developer='Studio', publisher='Publisher')
+        with patch.object(manager.provider, 'index', return_value=index), patch.object(manager.provider, 'artwork', return_value=(None, None)), patch.object(manager.provider, 'description', return_value=None), patch.object(manager.provider, 'identify', return_value='Q1'), patch.object(manager.provider, 'entity_description', return_value=None), patch.object(manager.provider, 'facts', return_value=(facts, 'https://www.wikidata.org/wiki/Q1')):
+            manager.process(path)
+        record = s.catalog()[0]['metadata']
+        self.assertEqual(record['state'], 'ready')
+        self.assertEqual(record['missing_fields'], [])
+        self.assertIsNone(record['next_retry'])
+        manager.enqueue_due()
+        self.assertTrue(manager.queue.empty())
+        record.update(state='partial', publisher=None, next_retry=1)
+        manager.save(path, record)
+        manager.enqueue_due()
+        manager.enqueue_due()
+        self.assertEqual(manager.queue.qsize(), 1)
+
+    def test_reviewed_mission_pack_can_be_filled_without_art_catalog_match(self):
+        import metadata
+        name = 'Spear of Destiny - Ultimate Challenge.dosz'
+        self.file('downloads/Library/DOS/' + name)
+        s.add_playlist_entry('DOS', name)
+        manager = metadata.MetadataManager(s)
+        path = s.catalog()[0]['path']
+        index = {'records': [{'title': 'Spear of Destiny', 'crcs': []}], 'sources': [], 'warnings': []}
+        with patch.object(manager.provider, 'index', return_value=index), patch.object(manager.provider, 'artwork', return_value=(None, None)), patch.object(manager.provider, 'description', return_value=None), patch.object(manager.provider, 'identify') as identify:
+            manager.process(path)
+            identify.assert_not_called()
+        record = s.catalog()[0]['metadata']
+        self.assertEqual((record['state'], record['year'], record['developer']), ('ready', '1994', 'FormGen'))
+        self.assertEqual(record['match'], 'verified')
 
 
 if __name__ == '__main__':

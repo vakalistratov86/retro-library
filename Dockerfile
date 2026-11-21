@@ -2,7 +2,7 @@ FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY service.py metadata.py restore_backup.py app.js library.js index.html style.css ./
+COPY service.py metadata.py metadata_corrections.json restore_backup.py app.js library.js index.html style.css ./
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER 1000:1000
 EXPOSE 8080

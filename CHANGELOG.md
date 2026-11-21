@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.2 — 2026-11-21
+
+- Resolve missing facts independently of Wikipedia descriptions using exact Wikidata titles/aliases and platform evidence. Ambiguous matches remain unselected.
+- Accept genre-based introductory wording and try the next Wikipedia language after a provider failure.
+- Add sourced, platform-scoped corrections for known aliases, port credits and the Ultimate Challenge mission pack.
+- Mark incomplete metadata explicitly and retry automatically: weekly for unavailable facts; exponential backoff from one hour to one day for errors.
+- Preserve retry schedules across restarts, retain manual choices and show missing fields/next retry time in the UI.
+
 ## 1.1.1 — 2026-11-21
 
 - Fill missing year, genre, developer and publisher from the Wikidata entity linked to the matched Wikipedia article.

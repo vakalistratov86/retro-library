@@ -51,7 +51,62 @@ class MetadataTests(unittest.TestCase):
         self.assertTrue(m.needs_enrichment(record))
         record['metadata_version'] = m.METADATA_VERSION
         self.assertFalse(m.needs_enrichment(record))
-        self.assertFalse(m.needs_enrichment({'state': 'needs_review'}))
+        self.assertTrue(m.needs_enrichment({'state': 'needs_review'}))
+        self.assertFalse(m.needs_enrichment({'state': 'needs_review', 'metadata_version': m.METADATA_VERSION}))
+
+    def test_retry_schedule_is_persistent_bounded_and_stops_when_complete(self):
+        record = {'canonical_applied': True, 'year': '2000'}
+        with patch.object(m.time, 'time', return_value=1000):
+            m.schedule_metadata(record)
+            self.assertEqual(record['state'], 'partial')
+            self.assertEqual(record['missing_fields'], ['genre', 'developer', 'publisher'])
+            self.assertEqual(record['next_retry'], 1000 + 7 * 86400)
+            self.assertFalse(m.needs_enrichment(record))
+            for _ in range(20):
+                m.schedule_metadata(record, failed=True)
+            self.assertEqual(record['next_retry'], 1000 + 86400)
+        with patch.object(m.time, 'time', return_value=1000 + 86400):
+            self.assertTrue(m.needs_enrichment(record))
+        record.update(genre='Action', developer='Studio', publisher='Publisher')
+        m.schedule_metadata(record)
+        self.assertEqual(record['state'], 'ready')
+        self.assertIsNone(record['next_retry'])
+        self.assertFalse(m.needs_enrichment(record))
+
+    def test_page_detection_accepts_genre_wording_but_rejects_series(self):
+        page = {'title': 'Super Mario Bros.', 'extract': 'Super Mario Bros. is a 1985 platform game.', 'pageprops': {'wikibase-shortdesc': '1985 video game'}}
+        self.assertTrue(m.Provider.is_game_page(page))
+        page['title'] = 'Diablo (series)'
+        self.assertFalse(m.Provider.is_game_page(page))
+        page['title'] = 'Diablo'
+        page['pageprops']['disambiguation'] = ''
+        self.assertFalse(m.Provider.is_game_page(page))
+
+    def test_wikipedia_outage_tries_next_language(self):
+        data = {'query': {'pages': [{'title': 'Example', 'extract': 'A computer game.', 'pageprops': {'wikibase_item': 'Q1'}}]}}
+        with tempfile.TemporaryDirectory() as folder:
+            provider = m.Provider(folder)
+            with patch.object(provider, 'fetch', side_effect=[OSError('offline'), json.dumps(data).encode()]):
+                self.assertEqual(provider.description('Example')['language'], 'en')
+
+    def test_entity_search_requires_exact_title_unique_platform_match(self):
+        hits = {'search': [{'id': 'Q1', 'label': 'Example'}, {'id': 'Q2', 'label': 'Example'}, {'id': 'Q3', 'label': 'Example II'}]}
+        entities = {'Q1': {'claims': {'P400': [self.claim({'id': 'Q10677'})]}}, 'Q2': {'claims': {'P400': [self.claim({'id': 'Q1406'})]}}}
+        with tempfile.TemporaryDirectory() as folder:
+            provider = m.Provider(folder)
+            with patch.object(provider, 'fetch', return_value=json.dumps(hits).encode()), patch.object(provider, 'entities', return_value=entities) as fetch_entities:
+                self.assertEqual(provider.identify('Example (USA)', 'PlayStation'), 'Q1')
+                self.assertEqual(fetch_entities.call_args.args[0], ['Q1', 'Q2'])
+                self.assertIsNone(provider.identify('Example', 'NES'))
+                entities['Q2'] = entities['Q1']
+                self.assertIsNone(provider.identify('Example', 'PlayStation'))
+
+    def test_reviewed_corrections_are_scoped_to_title_and_platform(self):
+        self.assertEqual(m.correction_for('Diablo (USA) [RUS]', 'PlayStation')['facts']['year'], '1998')
+        self.assertFalse(m.correction_for('Diablo II', 'PlayStation'))
+        self.assertFalse(m.correction_for('Diablo', 'DOS'))
+        self.assertEqual(m.correction_for('Spear of Destiny - Ultimate Challenge', 'DOS')['facts']['developer'], 'FormGen')
+        self.assertFalse(m.correction_for('Spear of Destiny', 'DOS'))
 
     def test_no_unlinked_or_malformed_entity_lookup(self):
         with tempfile.TemporaryDirectory() as folder:

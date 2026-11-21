@@ -17,6 +17,8 @@ Excerpts may be shortened. Preserve this attribution when redistributing them.
 Missing structured facts can be retrieved from Wikidata (CC0), linked to the
 matched Wikipedia article: https://www.wikidata.org/wiki/Wikidata:Licensing
 Source entity links are retained in the library. No provider dataset is bundled.
+The small metadata_corrections.json file contains independently reviewed factual
+corrections and aliases with source links; it is not a copy of a provider catalog.
 
 Pillow is an installed dependency under its own HPND/PIL-derived license:
 https://github.com/python-pillow/Pillow/blob/main/LICENSE

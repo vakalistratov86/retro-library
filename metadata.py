@@ -17,7 +17,7 @@ import zlib
 USER_AGENT = 'RetroLibrary/1.1 (+https://github.com/vakalistratov86/retro-library)'
 FIELDS = ('genre', 'developer', 'publisher', 'releaseyear')
 KINDS = ('Named_Boxarts', 'Named_Snaps', 'Named_Titles')
-METADATA_VERSION = 2
+METADATA_VERSION = 3
 FACTS = {'year': 'P577', 'genre': 'P136', 'developer': 'P178', 'publisher': 'P123'}
 PLATFORMS = {'NES': {'Q172742'}, 'SNES': {'Q183259'}, 'Mega Drive': {'Q10676'}, 'PlayStation': {'Q10677'}, 'DOS': {'Q47604', 'Q170434'}}
 ALIASES = {'battletoadsanddoubledragontheultimateteam': 'Battletoads-Double Dragon', 'supercontra': 'Super C', 'terminator2judgementday': 'Terminator 2 - Judgment Day', 'civilization': "Sid Meier's Civilization"}
@@ -35,6 +35,27 @@ def normalize(title):
     for roman, digit in (('iii', '3'), ('ii', '2'), ('iv', '4')):
         text = re.sub(r'\b' + roman + r'\b', digit, text)
     return re.sub(r'[^a-z0-9а-я]', '', text)
+
+
+def correction_for(title, system):
+    entries = json.loads(Path(__file__).with_name('metadata_corrections.json').read_text('utf-8'))
+    return next((e for e in entries if e['system'] == system and normalize(title) in {normalize(t) for t in e['titles']}), {})
+
+
+def missing_fields(record):
+    return [field for field in FACTS if not record.get(field)]
+
+
+def schedule_metadata(record, failed=False):
+    record['missing_fields'] = missing_fields(record)
+    record['metadata_version'] = METADATA_VERSION
+    if record['missing_fields'] or failed:
+        record['retry_attempts'] = record.get('retry_attempts', 0) + 1
+        delay = min(86400, 3600 * 2 ** min(record['retry_attempts'] - 1, 5)) if failed else 7 * 86400
+        record['next_retry'] = time.time() + delay
+        record['state'] = 'partial' if record['missing_fields'] else 'ready'
+    else:
+        record.update(state='ready', retry_attempts=0, next_retry=None)
 
 
 def artwork_label(label):
@@ -67,9 +88,13 @@ def allowed_url(url):
 
 
 def needs_enrichment(record):
-    return record.get('state') in (None, 'queued', 'processing', 'error') or (
-        record.get('state') == 'ready' and (
-            not record.get('canonical_applied') or record.get('metadata_version', 0) < METADATA_VERSION))
+    if record.get('state') in (None, 'queued', 'processing'):
+        return True
+    if record.get('metadata_version', 0) < METADATA_VERSION:
+        return True
+    if record.get('next_retry'):
+        return record['next_retry'] <= time.time()
+    return record.get('state') == 'error' or (record.get('state') == 'ready' and not record.get('canonical_applied'))
 
 
 def claim_values(claims, property_id, system):
@@ -263,16 +288,71 @@ class Provider:
 
     def description(self, title, year=None):
         query_title = base_title(title)
+        failures = []
         for language in ('ru', 'en'):
-            query = {'action': 'query', 'generator': 'search', 'gsrsearch': query_title + (' видеоигра' if language == 'ru' else ' video game'), 'gsrlimit': 5, 'prop': 'extracts|pageprops', 'exintro': 1, 'explaintext': 1, 'exsentences': 3, 'format': 'json', 'formatversion': 2}
-            data = self.fetch('https://' + language + '.wikipedia.org/w/api.php?' + urlencode(query), limit=2 * 1024**2)
+            query = {'action': 'query', 'generator': 'search', 'gsrsearch': '"' + query_title.replace('"', '') + '"' + (' видеоигра' if language == 'ru' else ' video game'), 'gsrlimit': 10, 'prop': 'extracts|pageprops', 'exintro': 1, 'explaintext': 1, 'exsentences': 3, 'format': 'json', 'formatversion': 2}
+            try:
+                data = self.fetch('https://' + language + '.wikipedia.org/w/api.php?' + urlencode(query), limit=2 * 1024**2)
+            except (OSError, ValueError) as exc:
+                failures.append(str(exc))
+                continue
             pages = json.loads(data).get('query', {}).get('pages', []) if data else []
-            candidates = [p for p in pages if normalize(p.get('title', '')) == normalize(query_title) and 'disambiguation' not in p.get('pageprops', {}) and re.search(r'video\s*game|видеоигр|компьютерн\w* игр', p.get('extract', ''), re.I)]
+            candidates = [p for p in pages if normalize(p.get('title', '')) == normalize(query_title) and self.is_game_page(p)]
             if len(candidates) > 1:
                 candidates = [p for p in candidates if year and str(year) in p.get('extract', '')[:500]]
             if len(candidates) == 1:
-                page = candidates[0]
-                return {'text': page['extract'][:1200], 'url': 'https://' + language + '.wikipedia.org/wiki/' + quote(page['title'].replace(' ', '_')), 'wikidata_id': page.get('pageprops', {}).get('wikibase_item'), 'language': language, 'license': 'CC BY-SA 4.0', 'attribution': 'Wikipedia contributors; excerpt may be shortened'}
+                return self.page_description(candidates[0], language)
+        if failures:
+            raise OSError('; '.join(failures))
+        return None
+
+    @staticmethod
+    def is_game_page(page):
+        props = page.get('pageprops', {})
+        if 'disambiguation' in props or re.search(r'\((?:series|franchise|серия[^)]*)\)', page.get('title', ''), re.I):
+            return False
+        short = props.get('wikibase-shortdesc', '')
+        if re.search(r'\b(?:series|franchise)\b|серия\s+(?:компьютерных\s+)?игр', short, re.I):
+            return False
+        return bool(re.search(r'video\s*game|computer game|видеоигр|компьютерн\w* игр', short + ' ' + page.get('extract', ''), re.I))
+
+    @staticmethod
+    def page_description(page, language):
+        return {'text': page.get('extract', '')[:1200], 'url': 'https://' + language + '.wikipedia.org/wiki/' + quote(page['title'].replace(' ', '_')), 'wikidata_id': page.get('pageprops', {}).get('wikibase_item'), 'language': language, 'license': 'CC BY-SA 4.0', 'attribution': 'Wikipedia contributors; excerpt may be shortened'}
+
+    def identify(self, title, system, correction=None):
+        """Resolve exact labels/aliases and require platform evidence, never choose a fuzzy hit."""
+        if (correction or {}).get('entity'):
+            return correction['entity']
+        query = {'action': 'wbsearchentities', 'search': base_title(title), 'language': 'en', 'type': 'item', 'limit': 10, 'format': 'json'}
+        result = json.loads(self.fetch('https://www.wikidata.org/w/api.php?' + urlencode(query), limit=2 * 1024**2))
+        if 'error' in result:
+            raise ValueError('Wikidata search: ' + result['error'].get('code', 'API error'))
+        exact = [e['id'] for e in result.get('search', []) if re.fullmatch(r'Q[1-9][0-9]*', e.get('id', '')) and normalize(title) in {normalize(e.get('label', '')), normalize(e.get('match', {}).get('text', ''))}]
+        candidates = []
+        for qid, entity in (self.entities(exact, 'claims') if exact else {}).items():
+            platforms = {v.get('id') for v in claim_values(entity.get('claims', {}), 'P400', system) if isinstance(v, dict)}
+            if platforms.intersection(PLATFORMS.get(system, set())):
+                candidates.append(qid)
+        return candidates[0] if len(candidates) == 1 else None
+
+    def entity_description(self, entity_id):
+        entity = self.entities([entity_id], 'sitelinks').get(entity_id, {})
+        failures = []
+        for language in ('ru', 'en'):
+            title = entity.get('sitelinks', {}).get(language + 'wiki', {}).get('title')
+            if not title:
+                continue
+            query = {'action': 'query', 'titles': title, 'prop': 'extracts|pageprops', 'exintro': 1, 'explaintext': 1, 'exsentences': 3, 'format': 'json', 'formatversion': 2}
+            try:
+                data = json.loads(self.fetch('https://' + language + '.wikipedia.org/w/api.php?' + urlencode(query), limit=2 * 1024**2))
+                for page in data.get('query', {}).get('pages', []):
+                    if page.get('pageprops', {}).get('wikibase_item') == entity_id and page.get('extract') and 'disambiguation' not in page.get('pageprops', {}):
+                        return self.page_description(page, language)
+            except (OSError, ValueError) as exc:
+                failures.append(str(exc))
+        if failures:
+            raise OSError('; '.join(failures))
         return None
 
     def entities(self, ids, props):
@@ -291,7 +371,7 @@ class Provider:
         claims = entity.get('claims', {})
         values = {field: claim_values(claims, prop, system) for field, prop in FACTS.items()}
         ids = {v['id'] for field, items in values.items() if field != 'year' for v in items if isinstance(v, dict) and re.fullmatch(r'Q[1-9][0-9]*', v.get('id', ''))}
-        labels = self.entities(ids, 'labels') if ids else {}
+        labels = self.entities(ids, 'labels|sitelinks') if ids else {}
         result = {}
         years = [int(v['time'][1:5]) for v in values['year'] if isinstance(v, dict) and v.get('precision', 0) >= 9 and re.match(r'^\+[0-9]{4}-', v.get('time', ''))]
         if years:
@@ -301,6 +381,8 @@ class Provider:
             for value in values[field]:
                 entry = labels.get(value.get('id'), {}).get('labels', {}) if isinstance(value, dict) else {}
                 name = (entry.get('ru') or entry.get('en') or {}).get('value')
+                if not name and isinstance(value, dict):
+                    name = labels.get(value.get('id'), {}).get('sitelinks', {}).get('enwiki', {}).get('title')
                 if name and name not in names:
                     names.append(name)
             if names:
@@ -359,6 +441,9 @@ class MetadataManager:
 
     def start(self):
         threading.Thread(target=self.loop, daemon=True, name='metadata').start()
+        self.enqueue_due()
+
+    def enqueue_due(self):
         for game in self.s.catalog():
             if needs_enrichment(game['metadata']):
                 self.enqueue(game['path'])
@@ -402,9 +487,19 @@ class MetadataManager:
         self.save(path, record)
         db = self.s.SYSTEMS[game['system']][0]
         index = self.provider.index(db)
+        if not chosen and record.get('match') == 'manual':
+            chosen = record.get('title')
         match, method, candidates = self.provider.choose(index, game['label'], rom_crcs(self.s.safe_path(self.s.ROOT, path)), chosen)
+        correction = correction_for(chosen or (match or {}).get('title') or game['label'], game['system'])
+        entity_id = None
+        if not match and correction.get('canonical_title'):
+            match, method = {'title': correction['canonical_title']}, 'verified'
         if not match:
-            self.save(path, {**record, 'state': 'needs_review' if candidates else 'not_found', 'candidates': candidates})
+            entity_id = self.provider.identify(game['label'], game['system'], correction)
+            if entity_id:
+                match, method = {'title': base_title(game['label'])}, 'wikidata'
+        if not match:
+            self.save(path, {**record, 'state': 'needs_review' if candidates else 'not_found', 'candidates': candidates, 'metadata_version': METADATA_VERSION, 'missing_fields': missing_fields(record), 'next_retry': time.time() + 7 * 86400})
             return
         same_title = record.get('title') == match['title']
         previous = dict(record) if same_title else {}
@@ -419,6 +514,12 @@ class MetadataManager:
                 record['field_sources'].pop(field, None)
             elif record[field] and record['field_sources'].get(field):
                 record['sources'].append(record['field_sources'][field])
+        # Small, reviewed platform corrections take precedence over generic original-game facts.
+        for field, value in correction.get('facts', {}).items():
+            record[field] = value
+            record['field_sources'][field] = correction['source']
+        if correction.get('facts'):
+            record['sources'].append(correction['source'])
         images = {}
         for kind in KINDS:
             rel = 'thumbnails/' + db + '/' + kind + '/' + artwork_label(game['label']) + '.png'
@@ -434,30 +535,54 @@ class MetadataManager:
             except (OSError, ValueError) as exc:
                 record['warnings'].append(kind + ': ' + str(exc))
         try:
-            description = self.provider.description(match['title'], match.get('releaseyear'))
-            if description:
-                record['description'] = description
+            if not record.get('description'):
+                description = self.provider.description(match['title'], match.get('releaseyear'))
+                if description:
+                    record['description'] = description
         except (OSError, ValueError) as exc:
             record['warnings'].append('Описание временно недоступно: ' + str(exc))
         try:
-            if any(not record.get(field) for field in FACTS):
-                facts, source = self.provider.facts(record.get('description'), game['system'])
+            if missing_fields(record):
+                # An exact platform-validated entity also works when no article/excerpt exists.
+                entity_id = entity_id or self.provider.identify(match['title'], game['system'], correction)
+                if not entity_id:
+                    linked = (record.get('description') or {}).get('wikidata_id')
+                    if linked:
+                        entity = self.provider.entities([linked], 'claims').get(linked, {})
+                        platforms = {v.get('id') for v in claim_values(entity.get('claims', {}), 'P400', game['system']) if isinstance(v, dict)}
+                        if platforms.intersection(PLATFORMS.get(game['system'], set())):
+                            entity_id = linked
+                facts, source = self.provider.facts({'wikidata_id': entity_id}, game['system'])
                 merge_facts(record, facts, source)
-            record['metadata_version'] = METADATA_VERSION
+                if entity_id:
+                    record['wikidata_id'] = entity_id
+                    if not record.get('description'):
+                        description = self.provider.entity_description(entity_id)
+                        if description:
+                            record['description'] = description
         except (OSError, ValueError) as exc:
             record['warnings'].append('Дополнительные сведения временно недоступны: ' + str(exc))
+        record['sources'] = list(dict.fromkeys(record['sources']))
+        schedule_metadata(record, failed=bool(record['warnings']))
         self.apply_canonical(game, record, images)
         self.s.wake.set()
         self.s.event('Оформление найдено: ' + game['label'])
 
     def loop(self):
         while True:
-            path, chosen = self.queue.get()
+            try:
+                path, chosen = self.queue.get(timeout=60)
+            except queue.Empty:
+                # Refresh in-memory indexes before due retries; disk cache expires after seven days.
+                self.provider.memory.clear()
+                self.enqueue_due()
+                continue
             self.running = path
             try:
                 self.process(path, chosen)
             except Exception as exc:
                 previous = self.s.read_json(self.s.STATE / 'metadata.json', {}).get(path, {})
+                schedule_metadata(previous, failed=True)
                 self.save(path, {**previous, 'state': 'error', 'error': str(exc), 'updated': self.s.now()})
             finally:
                 self.running = None

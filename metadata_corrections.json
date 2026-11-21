@@ -1,0 +1,37 @@
+[
+  {
+    "system": "NES", "titles": ["Kung Fu"], "entity": "Q1319139",
+    "source": "https://en.wikipedia.org/wiki/Kung-Fu_Master_(video_game)",
+    "reason": "The NES port of Kung-Fu Master was released as Kung Fu."
+  },
+  {
+    "system": "PlayStation", "titles": ["Driver - You Are the Wheelman"], "entity": "Q2293778",
+    "source": "https://en.wikipedia.org/wiki/Driver_(video_game)",
+    "reason": "You Are the Wheelman is the North American subtitle."
+  },
+  {
+    "system": "NES", "titles": ["The Terminator", "Terminator, The"],
+    "facts": {"year": "1992"},
+    "source": "https://en.wikipedia.org/wiki/List_of_Terminator_video_games#Nintendo_versions",
+    "reason": "The NES release is distinct from the DOS, Sega and SNES games."
+  },
+  {
+    "system": "PlayStation", "titles": ["Diablo"], "entity": "Q220960",
+    "facts": {"year": "1998", "developer": "Climax Studios", "publisher": "Electronic Arts"},
+    "source": "https://en.wikipedia.org/wiki/Diablo_(video_game)#Expansions,_ports,_re-releases",
+    "reason": "Platform-specific credits and release year differ from the original Windows game."
+  },
+  {
+    "system": "PlayStation", "titles": ["Need for Speed - Porsche Unleashed", "Need for Speed: Porsche Unleashed"],
+    "facts": {"developer": "Eden Studios"},
+    "source": "https://en.wikipedia.org/wiki/Need_for_Speed:_Porsche_Unleashed",
+    "reason": "Eden Studios developed the PlayStation version; EA Canada developed the PC version."
+  },
+  {
+    "system": "DOS", "titles": ["Spear of Destiny - Ultimate Challenge", "Spear of Destiny - Mission 3 - Ultimate Challenge"],
+    "canonical_title": "Spear of Destiny - Ultimate Challenge",
+    "facts": {"year": "1994", "genre": "Шутер от первого лица", "developer": "FormGen", "publisher": "FormGen"},
+    "source": "https://en.wikipedia.org/wiki/Wolfenstein_3D#Release",
+    "reason": "Ultimate Challenge is FormGen's 1994 mission pack, not id Software's 1992 base game."
+  }
+]
