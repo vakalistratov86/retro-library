@@ -1,0 +1,18 @@
+Retro Library is an independent project and is not affiliated with Apple,
+TrueNAS, Libretro or Wikimedia.
+
+The MIT license covers this repository's original code and documentation.
+It does not grant rights to ROMs, BIOS images, game artwork or provider data.
+
+Runtime metadata and artwork sources:
+- https://github.com/libretro/libretro-database
+- https://github.com/libretro-thumbnails/libretro-thumbnails
+No copies of their catalogs or artwork are bundled in this repository.
+Downloaded artwork remains subject to the rights of its original owners.
+
+Wikipedia excerpts are provided with article links and contributor attribution
+under CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/
+Excerpts may be shortened. Preserve this attribution when redistributing them.
+
+Pillow is an installed dependency under its own HPND/PIL-derived license:
+https://github.com/python-pillow/Pillow/blob/main/LICENSE

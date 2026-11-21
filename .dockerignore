@@ -1,0 +1,9 @@
+*
+!requirements.txt
+!service.py
+!metadata.py
+!restore_backup.py
+!app.js
+!library.js
+!index.html
+!style.css

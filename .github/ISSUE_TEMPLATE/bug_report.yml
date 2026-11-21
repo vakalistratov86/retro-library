@@ -1,0 +1,18 @@
+name: Bug report
+description: Report a reproducible issue without private data or game files.
+body:
+  - type: input
+    id: version
+    attributes: {label: Application and RetroArch versions}
+    validations: {required: true}
+  - type: textarea
+    id: environment
+    attributes: {label: Deployment, description: Docker or TrueNAS version; replace personal IPs and paths with placeholders.}
+    validations: {required: true}
+  - type: textarea
+    id: reproduction
+    attributes: {label: Steps and expected/actual result}
+    validations: {required: true}
+  - type: textarea
+    id: logs
+    attributes: {label: Redacted logs, description: Do not attach ROMs, BIOS, backups, tokens or saves.}
