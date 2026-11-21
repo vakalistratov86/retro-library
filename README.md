@@ -23,7 +23,7 @@ A self-hosted library manager for **RetroArch on Apple TV**, designed for TrueNA
 
 - Docker with Compose, or a TrueNAS SCALE release supporting custom Docker Compose applications. The original deployment was tested on SCALE 24.10.2.4.
 - RetroArch running in the foreground on Apple TV, exposing its HTTP uploader on port 80 and WebDAV on port 8080. Tested with RetroArch 1.22.2; other builds may differ.
-- Network access from the container to Apple TV. Metadata lookup additionally uses GitHub/Libretro and Wikipedia over HTTPS. No metadata API key is required.
+- Network access from the container to Apple TV. Metadata lookup additionally uses GitHub/Libretro, Wikipedia and Wikidata over HTTPS. No metadata API key is required.
 - A trusted LAN. The UI has no login; it uses same-origin POST checks and CSRF tokens. The example binds to localhost. Do not expose it directly to the Internet.
 
 **Deselecting a game does not delete files already stored on Apple TV.** It removes that entry from the generated device playlist and stops future recovery of its exclusive ROM/artwork files. Shared disc tracks remain eligible while a selected game needs them. BIOS remain shared system files. Manual edits to device playlists are protected as conflicts rather than silently overwritten.
@@ -66,6 +66,8 @@ The Python process also accepts `LIBRARY_ROOT`, `STATE_ROOT`, `PORT` and `BACKUP
 ## Metadata and privacy
 
 Metadata lookup downloads cached Libretro catalogs, computes ROM checksums **locally**, and uses exact matches or explicit manual selection. ROM/BIOS contents are never uploaded to providers. Wikipedia receives a game-title search; GitHub receives catalog/image requests. Cache data stays in the private state directory and is not part of this repository.
+
+Missing year, genre, developer and publisher are filled from the Wikidata entity linked to the matched article. Platform-qualified claims take priority, claims for other platforms are excluded, and existing Libretro values are preserved. The year is the earliest available release year among eligible claims. Wikidata receives entity IDs only; source links are retained. Unavailable facts remain empty. Existing library entries are enriched automatically after upgrading, without re-uploading ROMs.
 
 Uncertain matches remain **Уточните игру** rather than receiving a guessed cover. Open a card to select a candidate or retry. Translations, hacks, homebrew and unusually named files may need manual matching. Provider outages/rate limits do not block ROM upload or normal recovery. Existing information and covers are retained.
 

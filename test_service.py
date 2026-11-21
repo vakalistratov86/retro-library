@@ -298,6 +298,24 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual((s.ROOT / updated['cover']).read_bytes(), b'cover bytes')
         self.assertTrue(updated['metadata']['canonical_applied'])
 
+    def test_metadata_enrichment_and_retry_keep_existing_facts(self):
+        import metadata
+        self.file('downloads/Library/NES/game.nes')
+        s.add_playlist_entry('NES', 'game.nes')
+        manager = metadata.MetadataManager(s)
+        path = s.catalog()[0]['path']
+        index = {'records': [{'title': 'Game (USA)', 'crcs': [], 'genre': 'Action'}], 'sources': [], 'warnings': []}
+        with patch.object(manager.provider, 'index', return_value=index), patch.object(manager.provider, 'artwork', return_value=(None, None)), patch.object(manager.provider, 'description', return_value={'wikidata_id': 'Q1'}), patch.object(manager.provider, 'facts', return_value=({'year': '2000', 'genre': 'Racing', 'developer': 'Studio'}, 'https://www.wikidata.org/wiki/Q1')):
+            manager.process(path)
+        record = s.catalog()[0]['metadata']
+        self.assertEqual((record['year'], record['genre'], record['developer']), ('2000', 'Action', 'Studio'))
+        self.assertEqual(record['metadata_version'], metadata.METADATA_VERSION)
+        with patch.object(manager.provider, 'index', return_value=index), patch.object(manager.provider, 'artwork', return_value=(None, None)), patch.object(manager.provider, 'description', side_effect=OSError('offline')), patch.object(manager.provider, 'facts', side_effect=OSError('offline')):
+            manager.process(path)
+        record = s.catalog()[0]['metadata']
+        self.assertEqual((record['year'], record['developer']), ('2000', 'Studio'))
+        self.assertIn('https://www.wikidata.org/wiki/Q1', record['sources'])
+
 
 if __name__ == '__main__':
     unittest.main()

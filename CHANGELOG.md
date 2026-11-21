@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 — 2026-11-21
+
+- Fill missing year, genre, developer and publisher from the Wikidata entity linked to the matched Wikipedia article.
+- Respect platform qualifiers and preserve existing Libretro values and cached facts during provider outages.
+- Automatically enrich previously processed library entries once; display source links for additional facts.
+- Add regression coverage for metadata migration, matching, merging and retries.
+
 ## 1.1.0 — 2026-11-21
 
 First public release.

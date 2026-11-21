@@ -1,7 +1,7 @@
 services:
   retro-library:
     build: .
-    image: retro-library:1.1.0
+    image: retro-library:1.1.1
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
     read_only: true

@@ -17,6 +17,9 @@ import zlib
 USER_AGENT = 'RetroLibrary/1.1 (+https://github.com/vakalistratov86/retro-library)'
 FIELDS = ('genre', 'developer', 'publisher', 'releaseyear')
 KINDS = ('Named_Boxarts', 'Named_Snaps', 'Named_Titles')
+METADATA_VERSION = 2
+FACTS = {'year': 'P577', 'genre': 'P136', 'developer': 'P178', 'publisher': 'P123'}
+PLATFORMS = {'NES': {'Q172742'}, 'SNES': {'Q183259'}, 'Mega Drive': {'Q10676'}, 'PlayStation': {'Q10677'}, 'DOS': {'Q47604', 'Q170434'}}
 ALIASES = {'battletoadsanddoubledragontheultimateteam': 'Battletoads-Double Dragon', 'supercontra': 'Super C', 'terminator2judgementday': 'Terminator 2 - Judgment Day', 'civilization': "Sid Meier's Civilization"}
 
 
@@ -60,7 +63,42 @@ def allowed_url(url):
         return p.path.startswith(('/libretro/libretro-database/', '/libretro-thumbnails/'))
     if p.hostname == 'api.github.com':
         return p.path.startswith('/repos/libretro-thumbnails/')
-    return p.hostname in ('ru.wikipedia.org', 'en.wikipedia.org') and p.path == '/w/api.php'
+    return p.hostname in ('ru.wikipedia.org', 'en.wikipedia.org', 'www.wikidata.org') and p.path == '/w/api.php'
+
+
+def needs_enrichment(record):
+    return record.get('state') in (None, 'queued', 'processing', 'error') or (
+        record.get('state') == 'ready' and (
+            not record.get('canonical_applied') or record.get('metadata_version', 0) < METADATA_VERSION))
+
+
+def claim_values(claims, property_id, system):
+    """Exclude deprecated/unknown values and claims for other platform versions."""
+    eligible = []
+    for claim in claims.get(property_id, []):
+        snak = claim.get('mainsnak', {})
+        if claim.get('rank') == 'deprecated' or snak.get('snaktype') != 'value':
+            continue
+        qualifiers = claim.get('qualifiers', {}).get('P400', [])
+        platforms = {q.get('datavalue', {}).get('value', {}).get('id') for q in qualifiers}
+        if qualifiers and not platforms.intersection(PLATFORMS.get(system, set())):
+            continue
+        eligible.append((bool(qualifiers), claim))
+    # A platform-specific statement is more relevant than a generic one.
+    if any(specific for specific, _ in eligible):
+        eligible = [(specific, c) for specific, c in eligible if specific]
+    if any(c.get('rank') == 'preferred' for _, c in eligible):
+        eligible = [(s, c) for s, c in eligible if c.get('rank') == 'preferred']
+    return [c['mainsnak']['datavalue']['value'] for _, c in eligible if 'datavalue' in c['mainsnak']]
+
+
+def merge_facts(record, facts, source):
+    for field in FACTS:
+        if not record.get(field) and facts.get(field):
+            record[field] = facts[field]
+            record.setdefault('field_sources', {})[field] = source
+            if source not in record.setdefault('sources', []):
+                record['sources'].append(source)
 
 
 class SafeRedirect(HTTPRedirectHandler):
@@ -234,8 +272,40 @@ class Provider:
                 candidates = [p for p in candidates if year and str(year) in p.get('extract', '')[:500]]
             if len(candidates) == 1:
                 page = candidates[0]
-                return {'text': page['extract'][:1200], 'url': 'https://' + language + '.wikipedia.org/wiki/' + quote(page['title'].replace(' ', '_')), 'language': language, 'license': 'CC BY-SA 4.0', 'attribution': 'Wikipedia contributors; excerpt may be shortened'}
+                return {'text': page['extract'][:1200], 'url': 'https://' + language + '.wikipedia.org/wiki/' + quote(page['title'].replace(' ', '_')), 'wikidata_id': page.get('pageprops', {}).get('wikibase_item'), 'language': language, 'license': 'CC BY-SA 4.0', 'attribution': 'Wikipedia contributors; excerpt may be shortened'}
         return None
+
+    def entities(self, ids, props):
+        query = {'action': 'wbgetentities', 'ids': '|'.join(sorted(ids)), 'props': props, 'languages': 'ru|en', 'format': 'json'}
+        data = json.loads(self.fetch('https://www.wikidata.org/w/api.php?' + urlencode(query), limit=4 * 1024**2))
+        if 'error' in data:
+            raise ValueError('Wikidata: ' + data['error'].get('code', 'API error'))
+        return data.get('entities', {})
+
+    def facts(self, description, system):
+        """Use the exact entity linked by the matched article, never fuzzy entity search."""
+        entity_id = (description or {}).get('wikidata_id')
+        if not isinstance(entity_id, str) or not re.fullmatch(r'Q[1-9][0-9]*', entity_id):
+            return {}, None
+        entity = self.entities([entity_id], 'claims').get(entity_id, {})
+        claims = entity.get('claims', {})
+        values = {field: claim_values(claims, prop, system) for field, prop in FACTS.items()}
+        ids = {v['id'] for field, items in values.items() if field != 'year' for v in items if isinstance(v, dict) and re.fullmatch(r'Q[1-9][0-9]*', v.get('id', ''))}
+        labels = self.entities(ids, 'labels') if ids else {}
+        result = {}
+        years = [int(v['time'][1:5]) for v in values['year'] if isinstance(v, dict) and v.get('precision', 0) >= 9 and re.match(r'^\+[0-9]{4}-', v.get('time', ''))]
+        if years:
+            result['year'] = str(min(years))
+        for field in ('genre', 'developer', 'publisher'):
+            names = []
+            for value in values[field]:
+                entry = labels.get(value.get('id'), {}).get('labels', {}) if isinstance(value, dict) else {}
+                name = (entry.get('ru') or entry.get('en') or {}).get('value')
+                if name and name not in names:
+                    names.append(name)
+            if names:
+                result[field] = ', '.join(names)
+        return result, 'https://www.wikidata.org/wiki/' + entity_id
 
 
 def rom_crcs(path):
@@ -290,7 +360,7 @@ class MetadataManager:
     def start(self):
         threading.Thread(target=self.loop, daemon=True, name='metadata').start()
         for game in self.s.catalog():
-            if game['metadata'].get('state') in (None, 'queued', 'processing', 'error') or (game['metadata'].get('state') == 'ready' and not game['metadata'].get('canonical_applied')):
+            if needs_enrichment(game['metadata']):
                 self.enqueue(game['path'])
 
     def apply_canonical(self, game, record, images):
@@ -336,7 +406,19 @@ class MetadataManager:
         if not match:
             self.save(path, {**record, 'state': 'needs_review' if candidates else 'not_found', 'candidates': candidates})
             return
-        record.update(state='ready', title=match['title'], match=method, candidates=[], genre=match.get('genre'), developer=match.get('developer'), publisher=match.get('publisher'), year=match.get('releaseyear'), sources=index['sources'], warnings=list(index['warnings']))
+        same_title = record.get('title') == match['title']
+        previous = dict(record) if same_title else {}
+        record.update(state='ready', title=match['title'], match=method, candidates=[], sources=list(index['sources']), warnings=list(index['warnings']))
+        if not same_title:
+            record.pop('description', None)
+        record['field_sources'] = dict(previous.get('field_sources', {}))
+        for field in FACTS:
+            value = match.get('releaseyear' if field == 'year' else field)
+            record[field] = value or previous.get(field)
+            if value:
+                record['field_sources'].pop(field, None)
+            elif record[field] and record['field_sources'].get(field):
+                record['sources'].append(record['field_sources'][field])
         images = {}
         for kind in KINDS:
             rel = 'thumbnails/' + db + '/' + kind + '/' + artwork_label(game['label']) + '.png'
@@ -357,6 +439,13 @@ class MetadataManager:
                 record['description'] = description
         except (OSError, ValueError) as exc:
             record['warnings'].append('Описание временно недоступно: ' + str(exc))
+        try:
+            if any(not record.get(field) for field in FACTS):
+                facts, source = self.provider.facts(record.get('description'), game['system'])
+                merge_facts(record, facts, source)
+            record['metadata_version'] = METADATA_VERSION
+        except (OSError, ValueError) as exc:
+            record['warnings'].append('Дополнительные сведения временно недоступны: ' + str(exc))
         self.apply_canonical(game, record, images)
         self.s.wake.set()
         self.s.event('Оформление найдено: ' + game['label'])

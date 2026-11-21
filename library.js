@@ -3,7 +3,7 @@
 let detailPath=null;
 const metadataStates={queued:'В очереди оформления',processing:'Ищем информацию…',ready:'Оформлено',needs_review:'Уточните игру',not_found:'Совпадение не найдено',error:'Поиск недоступен'};
 function visibleGames(){const q=$('search').value.toLowerCase();return state.games.filter(g=>(!selectedSystem||g.system===selectedSystem)&&(g.label+' '+(g.metadata?.title||'')).toLowerCase().includes(q))}
-function publicSource(url){try{const u=new URL(url);return u.protocol==='https:'&&['github.com','raw.githubusercontent.com','ru.wikipedia.org','en.wikipedia.org'].includes(u.hostname)?u.href:null}catch{return null}}
+function publicSource(url){try{const u=new URL(url);return u.protocol==='https:'&&['github.com','raw.githubusercontent.com','ru.wikipedia.org','en.wikipedia.org','www.wikidata.org'].includes(u.hostname)?u.href:null}catch{return null}}
 function renderGames(){
  const games=visibleGames();
  $('collection-title').textContent=selectedSystem||'Вся коллекция';$('result-count').textContent=games.length+' игр';
